@@ -1,0 +1,287 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+/**
+ * ---- ENUMS ----
+ */
+enum Role {
+  OWNER
+  ADMIN
+  MANAGER
+  CLIENT
+}
+
+enum ActivityType {
+  CALL
+  EMAIL
+  MEETING
+  NOTE
+  TASK
+}
+
+enum DealStatus {
+  OPEN
+  WON
+  LOST
+}
+
+/**
+ * ---- CORE ----
+ */
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  name      String?
+  password  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships OrganizationMember[]
+  ownedDeals  Deal[]               @relation("DealOwner")
+  assigned    Activity[]           @relation("ActivityAssignee")
+  createdActs Activity[]           @relation("ActivityCreator")
+
+  // симетричні сторони двох реляцій з Contact:
+  ownedContacts   Contact[] @relation("ContactOwner")
+  endUserContacts Contact[] @relation("ContactEndUser")
+}
+
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members    OrganizationMember[]
+  companies  Company[]
+  contacts   Contact[]
+  pipelines  Pipeline[]
+  deals      Deal[]
+  activities Activity[]
+  tags       Tag[]
+
+  @@index([name])
+}
+
+/**
+ * user<->org з роллю
+ */
+model OrganizationMember {
+  id        String       @id @default(uuid())
+  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId     String
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  role      Role
+  title     String?
+  invitedAt DateTime?    @default(now())
+  joinedAt  DateTime?    @default(now())
+
+  @@unique([orgId, userId])
+  @@index([orgId, role])
+}
+
+/**
+ * ---- CRM ENTITIES ----
+ */
+model Company {
+  id        String       @id @default(uuid())
+  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId     String
+  name      String
+  website   String?
+  phone     String?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  contacts   Contact[]
+  deals      Deal[]
+  activities Activity[]
+
+  tags CompanyTag[]
+
+  @@index([orgId, name])
+}
+
+model Contact {
+  id    String       @id @default(uuid())
+  org   Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId String
+
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  companyId String?
+
+  // 2 реляції на User з різними назвами:
+  owner   User?   @relation("ContactOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  ownerId String?
+
+  user   User?   @relation("ContactEndUser", fields: [userId], references: [id], onDelete: SetNull)
+  userId String?
+
+  firstName String
+  lastName  String
+  email     String?
+  phone     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  deals      Deal[]
+  activities Activity[]
+  tags       ContactTag[]
+
+  @@unique([orgId, email])
+  @@index([orgId, companyId])
+  @@index([ownerId])
+}
+
+model Pipeline {
+  id        String       @id @default(uuid())
+  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId     String
+  name      String
+  isDefault Boolean      @default(false)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  stages PipelineStage[]
+  deals  Deal[]
+
+  @@unique([orgId, name])
+}
+
+model PipelineStage {
+  id         String   @id @default(uuid())
+  pipeline   Pipeline @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  pipelineId String
+  name       String
+  order      Int
+
+  deals Deal[]
+
+  @@unique([pipelineId, order])
+  @@unique([pipelineId, name])
+  @@index([pipelineId])
+}
+
+model Deal {
+  id       String       @id @default(uuid())
+  org      Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId    String
+  title    String
+  amount   Decimal      @db.Decimal(12, 2)
+  currency String       @default("USD")
+  status   DealStatus   @default(OPEN)
+
+  pipeline   Pipeline?      @relation(fields: [pipelineId], references: [id], onDelete: SetNull)
+  pipelineId String?
+  stage      PipelineStage? @relation(fields: [stageId], references: [id], onDelete: SetNull)
+  stageId    String?
+
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  companyId String?
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  contactId String?
+
+  owner   User?   @relation("DealOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  ownerId String?
+
+  probability     Int?
+  expectedCloseAt DateTime?
+  closedAt        DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  activities Activity[]
+  tags       DealTag[]
+
+  @@index([orgId, status])
+  @@index([pipelineId, stageId])
+  @@index([companyId])
+  @@index([contactId])
+  @@index([ownerId])
+}
+
+/**
+ * ---- ACTIVITIES ----
+ */
+model Activity {
+  id    String       @id @default(uuid())
+  org   Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId String
+
+  type  ActivityType
+  note  String?
+  dueAt DateTime?
+  done  Boolean      @default(false)
+
+  deal      Deal?    @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  dealId    String?
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  contactId String?
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  companyId String?
+
+  assignedTo   User?   @relation("ActivityAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  assignedToId String?
+  createdBy    User?   @relation("ActivityCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdById  String?
+
+  createdAt DateTime @default(now())
+
+  @@index([orgId, type, done])
+  @@index([dealId])
+  @@index([contactId])
+  @@index([companyId])
+  @@index([assignedToId])
+}
+
+/**
+ * ---- TAGS ----
+ */
+model Tag {
+  id        String       @id @default(uuid())
+  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId     String
+  name      String
+  createdAt DateTime     @default(now())
+
+  dealTags    DealTag[]
+  contactTags ContactTag[]
+  companyTags CompanyTag[]
+
+  @@unique([orgId, name])
+}
+
+model DealTag {
+  deal   Deal   @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  dealId String
+  tag    Tag    @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  tagId  String
+
+  @@id([dealId, tagId])
+}
+
+model ContactTag {
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  contactId String
+  tag       Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  tagId     String
+
+  @@id([contactId, tagId])
+}
+
+model CompanyTag {
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  companyId String
+  tag       Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  tagId     String
+
+  @@id([companyId, tagId])
+}
